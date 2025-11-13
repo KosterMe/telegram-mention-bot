@@ -30,11 +30,10 @@ def webhook():
     try:
         # Логируем все входящие данные
         raw_data = request.get_data(as_text=True)
-        logger.info(f"📨 Received webhook: {raw_data}")
+        logger.info(f"📨 Received webhook: {raw_data[:500]}...")  # Ограничиваем длину
         
         if raw_data:
             data = json.loads(raw_data)
-            logger.info(f"📊 Parsed data: {json.dumps(data, indent=2)}")
             
             # Проверяем есть ли сообщение
             if 'message' in data:
@@ -45,9 +44,42 @@ def webhook():
                 
                 logger.info(f"💬 Message from {user.get('first_name')}: {text}")
                 
-                # Отвечаем на команды
-                if text.startswith('/'):
-                    response_text = f"✅ Получил команду: {text}\nЧат ID: {chat_id}"
+                # Обрабатываем команды
+                if text == '/start':
+                    response_text = (
+                        "👋 Привет! Я бот для упоминаний\n\n"
+                        "📢 Команды:\n"
+                        "/all - упомянуть всех\n" 
+                        "/random - случайный участник\n"
+                        "/help - справка"
+                    )
+                    send_telegram_message(chat_id, response_text)
+                    
+                elif text == '/help':
+                    response_text = (
+                        "🎯 Бот для упоминаний\n\n"
+                        "📢 Команды:\n"
+                        "/all - Упоминание всех\n"
+                        "/random - Случайный участник\n\n"
+                        "💡 Примеры:\n"
+                        "/all Всем читать!\n"
+                        "/all Собрание в 18:00"
+                    )
+                    send_telegram_message(chat_id, response_text)
+                    
+                elif text.startswith('/all'):
+                    # Простая версия команды /all
+                    custom_text = text[5:] if len(text) > 5 else "Внимание всем!"
+                    response_text = f"📢 {custom_text}\n\n@all @everyone"
+                    send_telegram_message(chat_id, response_text)
+                    
+                elif text == '/random':
+                    response_text = "🎲 Внимание случайному участнику!"
+                    send_telegram_message(chat_id, response_text)
+                    
+                else:
+                    # Ответ на неизвестные команды
+                    response_text = f"❌ Неизвестная команда: {text}\nИспользуй /help для списка команд"
                     send_telegram_message(chat_id, response_text)
                     
         return 'ok'
