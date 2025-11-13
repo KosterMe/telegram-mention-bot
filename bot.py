@@ -1,17 +1,31 @@
 import logging
 import os
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from flask import Flask, request, jsonify
+from telegram import Update, Bot
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 import random
+import threading
 
+# Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
+# Конфигурация
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '8206656364:AAExGzZ2Lgca_XYkzCsniJx4JpbakPaDB6M')
+PORT = int(os.environ.get('PORT', 5000))
+WEBHOOK_URL = os.getenv('RENDER_EXTERNAL_URL', '') + f"/webhook/{TOKEN}"
 
+# Flask приложение
+app = Flask(__name__)
+
+# Глобальные переменные для бота
+application = None
+bot = None
+
+# Твои оригинальные функции (не изменились)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Привет! Я бот для упоминаний\n\n"
@@ -111,22 +125,64 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/all Собрание в 18:00"
     )
 
-def main():
+# Flask endpoints
+@app.route('/')
+def home():
+    return jsonify({
+        "status": "Bot is running", 
+        "service": "Web Service",
+        "commands": ["/start", "/all", "/random", "/help"]
+    })
+
+@app.route('/health')
+def health():
+    return jsonify({"status": "healthy"})
+
+@app.route(f'/webhook/{TOKEN}', methods=['POST'])
+def webhook():
+    """Обработчик webhook от Telegram"""
     try:
-        application = Application.builder().token(TOKEN).build()
-        
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("help", help_command))
-        application.add_handler(CommandHandler("all", all_command))
-        application.add_handler(CommandHandler("random", random_command))
-        
-        logger.info("🚀 Бот запущен на Render!")
-        print("🤖 Бот работает...")
-        
-        application.run_polling()
-        
+        json_str = request.get_data().decode('UTF-8')
+        update = Update.de_json(json_str, bot)
+        application.process_update(update)
+        return 'ok'
     except Exception as e:
-        logger.error(f"Ошибка запуска: {e}")
+        logger.error(f"Webhook error: {e}")
+        return 'error', 500
+
+def setup_bot():
+    """Настройка и запуск бота"""
+    global application, bot
+    
+    application = Application.builder().token(TOKEN).build()
+    bot = application.bot
+    
+    # Добавляем обработчики (твои оригинальные функции)
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("all", all_command))
+    application.add_handler(CommandHandler("random", random_command))
+    
+    # Настраиваем webhook если URL доступен
+    if WEBHOOK_URL and 'onrender.com' in WEBHOOK_URL:
+        logger.info(f"Setting webhook to: {WEBHOOK_URL}")
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            secret_token='webhook',
+            webhook_url=WEBHOOK_URL
+        )
+    else:
+        # Локальная разработка
+        logger.info("Running in polling mode")
+        application.run_polling()
 
 if __name__ == "__main__":
-    main()
+    # Запускаем бота в отдельном потоке
+    bot_thread = threading.Thread(target=setup_bot)
+    bot_thread.daemon = True
+    bot_thread.start()
+    
+    # Запускаем Flask server
+    logger.info(f"Starting Flask server on port {PORT}")
+    app.run(host='0.0.0.0', port=PORT, debug=False)
