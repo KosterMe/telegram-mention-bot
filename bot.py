@@ -159,9 +159,6 @@ application.add_handler(CommandHandler("help", help_command))
 application.add_handler(CommandHandler("all", all_command))
 application.add_handler(CommandHandler("random", random_command))
 
-# Инициализируем application
-application.initialize()
-
 # Flask endpoints
 @app.route('/')
 def home():
@@ -180,23 +177,38 @@ def health():
 def webhook():
     """Обработчик webhook от Telegram"""
     try:
-        # Получаем JSON данные
-        json_data = request.get_json()
+        # Получаем сырые данные
+        raw_data = request.get_data(as_text=True)
+        logger.info(f"Received webhook data: {raw_data[:200]}...")  # Логируем первые 200 символов
         
-        if not json_data:
-            logger.error("No JSON data received")
-            return 'error: no json data', 400
+        if not raw_data:
+            logger.error("No data received")
+            return 'error: no data', 400
+        
+        # Парсим JSON вручную
+        try:
+            data_dict = json.loads(raw_data)
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error: {e}")
+            return 'error: invalid json', 400
         
         # Создаем Update объект
-        update = Update.de_json(json_data, application.bot)
+        update = Update.de_json(data_dict, application.bot)
         
-        # Обрабатываем обновление
-        application.process_update(update)
+        # Обрабатываем обновление асинхронно
+        async def process_update():
+            await application.process_update(update)
+        
+        # Запускаем в event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(process_update())
+        loop.close()
+        
         return 'ok'
         
     except Exception as e:
-        logger.error(f"Webhook error: {e}")
-        logger.error(f"Request data: {request.get_data()}")
+        logger.error(f"Webhook error: {e}", exc_info=True)
         return 'error', 500
 
 def setup_webhook():
