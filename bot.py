@@ -1,6 +1,7 @@
 import logging
 import os
 import asyncio
+import json
 from flask import Flask, request, jsonify
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -158,6 +159,9 @@ application.add_handler(CommandHandler("help", help_command))
 application.add_handler(CommandHandler("all", all_command))
 application.add_handler(CommandHandler("random", random_command))
 
+# Инициализируем application
+application.initialize()
+
 # Flask endpoints
 @app.route('/')
 def home():
@@ -176,14 +180,23 @@ def health():
 def webhook():
     """Обработчик webhook от Telegram"""
     try:
-        json_str = request.get_data().decode('UTF-8')
-        update = Update.de_json(json_str, application.bot)
+        # Получаем JSON данные
+        json_data = request.get_json()
+        
+        if not json_data:
+            logger.error("No JSON data received")
+            return 'error: no json data', 400
+        
+        # Создаем Update объект
+        update = Update.de_json(json_data, application.bot)
         
         # Обрабатываем обновление
-        application.update_queue.put_nowait(update)
+        application.process_update(update)
         return 'ok'
+        
     except Exception as e:
         logger.error(f"Webhook error: {e}")
+        logger.error(f"Request data: {request.get_data()}")
         return 'error', 500
 
 def setup_webhook():
