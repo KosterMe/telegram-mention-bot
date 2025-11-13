@@ -1,11 +1,8 @@
 import logging
 import os
-import asyncio
 import json
 from flask import Flask, request, jsonify
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
-import random
+import requests
 
 # Настройка логирования
 logging.basicConfig(
@@ -14,160 +11,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Конфигурация
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '8206656364:AAExGzZ2Lgca_XYkzCsniJx4JpbakPaDB6M')
 PORT = int(os.environ.get('PORT', 5000))
-WEBHOOK_URL = os.getenv('RENDER_EXTERNAL_URL', '') + f"/webhook"
 
-# Проверяем окружение
-IS_RENDER = 'RENDER' in os.environ
-logger.info(f"Running on Render: {IS_RENDER}")
-
-# Flask приложение
 app = Flask(__name__)
 
-# Инициализируем бота
-application = Application.builder().token(TOKEN).build()
-
-# Твои функции (без изменений)
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await context.bot.send_message(
-        chat_id=update.effective_chat.id,
-        text=(
-            "👋 Привет! Я бот для упоминаний\n\n"
-            "📢 Команды:\n"
-            "/all - упомянуть всех\n" 
-            "/random - случайный участник\n"
-            "/help - справка"
-        )
-    )
-
-async def all_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat = update.effective_chat
-    user = update.effective_user
-    
-    if chat.type not in ["group", "supergroup"]:
-        await context.bot.send_message(
-            chat_id=chat.id,
-            text="❌ Эта команда работает только в группах!"
-        )
-        return
-    
-    try:
-        bot = context.bot
-        custom_text = " ".join(context.args) if context.args else "Внимание всем!"
-        
-        total_members = await bot.get_chat_member_count(chat.id)
-        admins = await bot.get_chat_administrators(chat.id)
-        
-        admin_mentions = []
-        for admin in admins:
-            admin_user = admin.user
-            if not admin_user.is_bot and admin_user.username:
-                admin_mentions.append(f"@{admin_user.username}")
-        
-        message_parts = [f"📢 {custom_text}", ""]
-        
-        if admin_mentions:
-            message_parts.extend([
-                "👑 Администраторы:",
-                " ".join(admin_mentions),
-                ""
-            ])
-        
-        message_parts.extend([
-            f"👥 Участников: {total_members}",
-            f"💬 От: {user.first_name}"
-        ])
-        
-        await bot.send_message(
-            chat_id=chat.id,
-            text="\n".join(message_parts)
-        )
-            
-    except Exception as e:
-        logger.error(f"Ошибка: {e}")
-        await context.bot.send_message(
-            chat_id=chat.id,
-            text="📢 Внимание всем!"
-        )
-
-async def random_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat = update.effective_chat
-    user = update.effective_user
-    
-    if chat.type not in ["group", "supergroup"]:
-        await context.bot.send_message(
-            chat_id=chat.id,
-            text="❌ Эта команда работает только в группах!"
-        )
-        return
-    
-    try:
-        bot = context.bot
-        admins = await bot.get_chat_administrators(chat.id)
-        
-        human_admins = [admin for admin in admins if not admin.user.is_bot]
-        random.shuffle(human_admins)
-        
-        selected = human_admins[:1] if human_admins else []
-        
-        mentions = []
-        for admin in selected:
-            admin_user = admin.user
-            if admin_user.username:
-                mentions.append(f"@{admin_user.username}")
-            else:
-                name = admin_user.first_name
-                if admin_user.last_name:
-                    name += f" {admin_user.last_name}"
-                mentions.append(name)
-        
-        if mentions:
-            message = f"🎲 Внимание случайному участнику!\n\n🎯 Выбран: {mentions[0]}\n\n💬 От: {user.first_name}"
-            await bot.send_message(chat_id=chat.id, text=message)
-        else:
-            await bot.send_message(
-                chat_id=chat.id,
-                text="🎲 Не найдено участников для упоминания"
-            )
-        
-    except Exception as e:
-        logger.error(f"Ошибка: {e}")
-        await context.bot.send_message(
-            chat_id=chat.id,
-            text="🎲 Ошибка при выборе случайного участника"
-        )
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await context.bot.send_message(
-        chat_id=update.effective_chat.id,
-        text=(
-            "🎯 Бот для упоминаний\n\n"
-            "📢 Команды:\n"
-            "/all - Упоминание всех\n"
-            "/random - Случайный участник\n\n"
-            "💡 Примеры:\n"
-            "/all Всем читать!\n"
-            "/all Собрание в 18:00"
-        )
-    )
-
-# Добавляем обработчики
-application.add_handler(CommandHandler("start", start))
-application.add_handler(CommandHandler("help", help_command))
-application.add_handler(CommandHandler("all", all_command))
-application.add_handler(CommandHandler("random", random_command))
-
-# Flask endpoints
 @app.route('/')
 def home():
-    return jsonify({
-        "status": "Bot is running", 
-        "service": "Web Service",
-        "environment": "Render" if IS_RENDER else "Local",
-        "commands": ["/start", "/all", "/random", "/help"]
-    })
+    return jsonify({"status": "Bot is running", "webhook_set": True})
 
 @app.route('/health')
 def health():
@@ -175,67 +26,51 @@ def health():
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """Обработчик webhook от Telegram"""
+    """Webhook для Telegram"""
     try:
-        # Получаем сырые данные
+        # Логируем все входящие данные
         raw_data = request.get_data(as_text=True)
-        logger.info(f"Received webhook data: {raw_data[:200]}...")  # Логируем первые 200 символов
+        logger.info(f"📨 Received webhook: {raw_data}")
         
-        if not raw_data:
-            logger.error("No data received")
-            return 'error: no data', 400
-        
-        # Парсим JSON вручную
-        try:
-            data_dict = json.loads(raw_data)
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON decode error: {e}")
-            return 'error: invalid json', 400
-        
-        # Создаем Update объект
-        update = Update.de_json(data_dict, application.bot)
-        
-        # Обрабатываем обновление асинхронно
-        async def process_update():
-            await application.process_update(update)
-        
-        # Запускаем в event loop
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(process_update())
-        loop.close()
-        
+        if raw_data:
+            data = json.loads(raw_data)
+            logger.info(f"📊 Parsed data: {json.dumps(data, indent=2)}")
+            
+            # Проверяем есть ли сообщение
+            if 'message' in data:
+                message = data['message']
+                chat_id = message['chat']['id']
+                text = message.get('text', '')
+                user = message.get('from', {})
+                
+                logger.info(f"💬 Message from {user.get('first_name')}: {text}")
+                
+                # Отвечаем на команды
+                if text.startswith('/'):
+                    response_text = f"✅ Получил команду: {text}\nЧат ID: {chat_id}"
+                    send_telegram_message(chat_id, response_text)
+                    
         return 'ok'
         
     except Exception as e:
-        logger.error(f"Webhook error: {e}", exc_info=True)
+        logger.error(f"❌ Webhook error: {e}")
         return 'error', 500
 
-def setup_webhook():
-    """Настройка webhook для Render"""
-    if IS_RENDER and WEBHOOK_URL:
-        try:
-            # Запускаем в отдельном потоке с event loop
-            def run_async():
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(application.bot.set_webhook(url=WEBHOOK_URL))
-            
-            import threading
-            thread = threading.Thread(target=run_async)
-            thread.start()
-            thread.join()
-            
-            logger.info(f"Webhook set to: {WEBHOOK_URL}")
-        except Exception as e:
-            logger.error(f"Failed to set webhook: {e}")
+def send_telegram_message(chat_id, text):
+    """Отправка сообщения в Telegram"""
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    payload = {
+        'chat_id': chat_id,
+        'text': text
+    }
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        logger.info(f"📤 Sent message to {chat_id}, status: {response.status_code}")
+        return response.status_code == 200
+    except Exception as e:
+        logger.error(f"❌ Send message error: {e}")
+        return False
 
 if __name__ == "__main__":
-    # Настраиваем webhook если на Render
-    setup_webhook()
-    
-    logger.info(f"Starting Flask server on port {PORT}")
-    logger.info(f"Webhook URL: {WEBHOOK_URL}")
-    
-    # Запускаем Flask
+    logger.info(f"🚀 Starting bot on port {PORT}")
     app.run(host='0.0.0.0', port=PORT, debug=False)
