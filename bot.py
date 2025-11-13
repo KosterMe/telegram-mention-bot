@@ -1,5 +1,6 @@
 import logging
 import os
+import asyncio
 from flask import Flask, request, jsonify
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -27,7 +28,7 @@ app = Flask(__name__)
 # Инициализируем бота
 application = Application.builder().token(TOKEN).build()
 
-# Твои функции
+# Твои функции (без изменений)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
@@ -157,9 +158,6 @@ application.add_handler(CommandHandler("help", help_command))
 application.add_handler(CommandHandler("all", all_command))
 application.add_handler(CommandHandler("random", random_command))
 
-# Инициализируем приложение
-application.initialize()
-
 # Flask endpoints
 @app.route('/')
 def home():
@@ -182,7 +180,7 @@ def webhook():
         update = Update.de_json(json_str, application.bot)
         
         # Обрабатываем обновление
-        application.process_update(update)
+        application.update_queue.put_nowait(update)
         return 'ok'
     except Exception as e:
         logger.error(f"Webhook error: {e}")
@@ -192,8 +190,17 @@ def setup_webhook():
     """Настройка webhook для Render"""
     if IS_RENDER and WEBHOOK_URL:
         try:
-            # Устанавливаем webhook
-            application.bot.set_webhook(url=WEBHOOK_URL)
+            # Запускаем в отдельном потоке с event loop
+            def run_async():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(application.bot.set_webhook(url=WEBHOOK_URL))
+            
+            import threading
+            thread = threading.Thread(target=run_async)
+            thread.start()
+            thread.join()
+            
             logger.info(f"Webhook set to: {WEBHOOK_URL}")
         except Exception as e:
             logger.error(f"Failed to set webhook: {e}")
