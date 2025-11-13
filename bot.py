@@ -1,10 +1,10 @@
 import logging
 import os
 from flask import Flask, request, jsonify
-from telegram import Update, Bot
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 import random
-import threading
+import asyncio
 
 # Настройка логирования
 logging.basicConfig(
@@ -23,9 +23,8 @@ app = Flask(__name__)
 
 # Глобальные переменные для бота
 application = None
-bot = None
 
-# Твои оригинальные функции (не изменились)
+# Твои функции (не изменились) 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Привет! Я бот для упоминаний\n\n"
@@ -142,22 +141,25 @@ def health():
 def webhook():
     """Обработчик webhook от Telegram"""
     try:
+        if application is None:
+            return 'Bot not initialized', 503
+            
         json_str = request.get_data().decode('UTF-8')
-        update = Update.de_json(json_str, bot)
-        application.process_update(update)
+        update = Update.de_json(json_str, application.bot)
+        application.update_queue.put_nowait(update)
         return 'ok'
     except Exception as e:
         logger.error(f"Webhook error: {e}")
         return 'error', 500
 
 def setup_bot():
-    """Настройка и запуск бота"""
-    global application, bot
+    """Настройка и запуск бота в том же потоке"""
+    global application
     
+    # Создаем application в основном потоке
     application = Application.builder().token(TOKEN).build()
-    bot = application.bot
     
-    # Добавляем обработчики (твои оригинальные функции)
+    # Добавляем обработчики
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("all", all_command))
@@ -166,23 +168,40 @@ def setup_bot():
     # Настраиваем webhook если URL доступен
     if WEBHOOK_URL and 'onrender.com' in WEBHOOK_URL:
         logger.info(f"Setting webhook to: {WEBHOOK_URL}")
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            secret_token='webhook',
-            webhook_url=WEBHOOK_URL
-        )
+        
+        # Запускаем webhook в отдельном потоке с правильным event loop
+        def start_webhook():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            application.run_webhook(
+                listen="0.0.0.0",
+                port=PORT,
+                secret_token='webhook',
+                webhook_url=WEBHOOK_URL
+            )
+        
+        import threading
+        webhook_thread = threading.Thread(target=start_webhook)
+        webhook_thread.daemon = True
+        webhook_thread.start()
+        
     else:
-        # Локальная разработка
+        # Локальная разработка - polling
         logger.info("Running in polling mode")
-        application.run_polling()
+        def start_polling():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            application.run_polling()
+        
+        import threading
+        polling_thread = threading.Thread(target=start_polling)
+        polling_thread.daemon = True
+        polling_thread.start()
 
 if __name__ == "__main__":
-    # Запускаем бота в отдельном потоке
-    bot_thread = threading.Thread(target=setup_bot)
-    bot_thread.daemon = True
-    bot_thread.start()
+    # Настраиваем бота
+    setup_bot()
     
-    # Запускаем Flask server
+    # Запускаем Flask server в основном потоке
     logger.info(f"Starting Flask server on port {PORT}")
-    app.run(host='0.0.0.0', port=PORT, debug=False)
+    app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False)
